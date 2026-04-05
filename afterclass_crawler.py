@@ -11,6 +11,23 @@ from io import BytesIO
 from concurrent.futures import ThreadPoolExecutor
 
 
+def download_slide(slide_url, sessionid, index, total):
+    session = requests.Session()
+    session.headers.update({
+        "cookie": f"sessionid={sessionid}",
+        "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36"
+    })
+    try:
+        response = session.get(slide_url, timeout=30)
+    except requests.exceptions.RequestException as e:
+        print(f"Failed to get slide {index}/{total}. Error: {e}.")
+        return index, None
+    if response.status_code != 200:
+        print(f"Failed to get slide {index}/{total}. Status code: {response.status_code}.")
+        return index, None
+    return index, response.content
+
+
 def download_video(video_url, file_path, sessionid, index, total):
     session = requests.Session()
     session.trust_env = False
@@ -137,6 +154,12 @@ if __name__ == "__main__":
         default="slides",
         help="slides: 下载课件；videos: 下载回放视频；both: 两者都下载"
     )
+    parser.add_argument(
+        "--workers",
+        type=int,
+        default=4,
+        help="下载线程数"
+    )
     args = parser.parse_args()
 
 
@@ -155,22 +178,11 @@ if __name__ == "__main__":
     session = requests.Session()
     session.trust_env = False
     session.headers.update({
-        "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36"
-    })
-
-    # 如果 config 中没有 sessionid，则自动扫码登录
-    if not sessionid:
-        sessionid = login_and_get_sessionid(session)
-        config["sessionid"] = sessionid
-        save_config(config)
-
-    session.headers.update({
+        "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36",
         "cookie": f"sessionid={sessionid}"
     })
-
-    # 如果 sessionid 过期，则自动重新登录
+    # 如果 sessionid 无效，则自动重新登录
     if not is_sessionid_valid(session):
-        print("sessionid 已失效，请重新扫码登录...")
         sessionid = login_and_get_sessionid(session)
         config["sessionid"] = sessionid
         save_config(config)
@@ -217,15 +229,26 @@ if __name__ == "__main__":
 
             pdf = FPDF()
             slides = response["data"]["slides"]
-            for slide in slides:
-                response = session.get(slide["cover"])
-                if response.status_code != 200:
-                    print("Error:", response.status_code)
-                    sys.exit()
-                img = Image.open(BytesIO(response.content))
+
+            tasks = []
+            for i, slide in enumerate(slides, start=1):
+                tasks.append((slide["cover"], sessionid, i, len(slides)))
+            
+            slide_contents = [None] * len(slides)
+            with ThreadPoolExecutor(max_workers=args.workers) as executor:
+                futures = [executor.submit(download_slide, *task) for task in tasks]
+                for future in futures:
+                    index, content = future.result()
+                    if content is None:
+                        print(f"Error: failed to download slide {index}/{len(slides)}.")
+                        sys.exit()
+                    slide_contents[index - 1] = content
+
+            for content in slide_contents:
+                img = Image.open(BytesIO(content))
                 width, height = img.size
                 pdf.add_page(format=(width * 25.4 / 72, height * 25.4 / 72))
-                pdf.image(BytesIO(response.content), x=0, y=0, w=width * 25.4 / 72, h=height * 25.4 / 72)
+                pdf.image(BytesIO(content), x=0, y=0, w=width * 25.4 / 72, h=height * 25.4 / 72)
 
             presentation_title = re.sub(r"[\\/:*?\"<>|]", ".", presentation_title)
             pdf.output(f"{lesson_title_safe}/{num}_{presentation_title}.pdf")
@@ -260,7 +283,7 @@ if __name__ == "__main__":
             file_path = f"{lesson_title_safe}/{lesson_title_safe}_{cnt}.mp4"
             tasks.append((video_url, file_path, sessionid, cnt, len(urls)))
 
-        with ThreadPoolExecutor(max_workers=4) as executor:
+        with ThreadPoolExecutor(max_workers=args.workers) as executor:
             for task in tasks:
                 executor.submit(download_video, *task)
 

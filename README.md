@@ -25,7 +25,7 @@ https://pro.yuketang.cn/v2/web/student-lesson-report/313xxxx/131986699xxxxxxxxxx
 确保安装所有依赖后运行该程序，注意 `fpdf` 需要安装 `fpdf2`。
 
 ```
-python afterclass_crawler.py --mode slides
+python afterclass_crawler.py --mode slides --workers 8
 ```
 
 参数说明：
@@ -33,6 +33,7 @@ python afterclass_crawler.py --mode slides
   - `slides`：仅下载课件，保存至 `{lesson_title}/{num}_{presentation_title}.pdf`。
   - `videos`：仅下载视频回放，保存至 `{lesson_title}/{lesson_title}_{num}.mp4`。
   - `both`：同时下载课件和视频回放。
+- `--workers`：下载线程数，默认为 `4`。
 
 ## LISENCE
 
